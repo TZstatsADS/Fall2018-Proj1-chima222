@@ -1,0 +1,100 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+```{r load libraries, warning=FALSE, message=FALSE}
+library(tidyverse)
+library(tidytext)
+library(DT)
+library(scales)
+library(wordcloud2)
+library(gridExtra)
+library(ngram)
+library(shiny) 
+library(tm)
+library(ggplot2)
+library(topicmodels)
+library(SnowballC)
+```
+
+
+```{r load data, warning=FALSE, message=FALSE}
+hm_data <- read_csv("../output/processed_moments.csv")
+
+urlfile<-'https://raw.githubusercontent.com/rit-public/HappyDB/master/happydb/data/demographic.csv'
+demo_data <- read_csv(urlfile)
+```
+
+```{r combine data}
+hm_data <- hm_data %>%
+  inner_join(demo_data, by = "wid") %>%
+  select(wid,
+         original_hm,
+         gender, 
+         marital, 
+         parenthood,
+         reflection_period,
+         age, 
+         country, 
+         ground_truth_category, 
+         text) %>%
+  mutate(count = sapply(hm_data$text, wordcount)) %>%
+  filter(gender %in% c("m", "f")) %>%
+  filter(marital %in% c("single", "married")) %>%
+  filter(parenthood %in% c("n", "y")) %>%
+  filter(reflection_period %in% c("24h", "3m")) %>%
+  mutate(reflection_period = fct_recode(reflection_period, 
+                                        months_3 = "3m", hours_24 = "24h"))
+```
+
+```{r wordcloud2}
+
+wc2<-function(data){
+  words<-strsplit(data$text," ")
+  words.freq<-table(unlist(words));
+  freq<-sort(words.freq,decreasing = TRUE)
+  freq<-data.frame(word = names(freq),freq =as.numeric(freq))
+  figPath <-"../figs/Happy.png"
+  wordcloud2(data=freq, figPath = figPath, size = 1.5,color = "random-light",backgroundColor = "black")
+}
+
+
+words<-strsplit(hm_data$text," ")
+words.freq<-table(unlist(words));
+freq<-sort(words.freq,decreasing = TRUE)
+freq<-data.frame(word = names(freq),freq =as.numeric(freq))
+figPath<- "../figs/Happy.png"
+wordcloud2(data=freq, figPath = figPath, size = 1.5,color = "random-light",backgroundColor = "black")
+```
+
+```{r happy moments by gender}
+red.bold.italic.text <- element_text(face = "bold.italic", color = "red",size = 15)
+g_num<-ggplot(hm_data, aes(marital))
+g_num+geom_bar(aes(fill = gender),position = position_stack(reverse = TRUE)) +
+  coord_flip() +
+  labs(title = "Who is Happier?", x = "Marital Status", y = "Count")+
+  theme(legend.position = "bottom",title = red.bold.italic.text, axis.title = red.bold.italic.text, plot.title = element_text(hjust = 0.5))
+```
+```{r happiest season}
+seasons<-c("spring","summer","fall","winter")
+count<-c()
+for (i in 1:length(seasons)){
+  count[i] <- freq[freq$word==seasons[i],]$freq
+}
+season_count<-data.frame(seasons,count)
+
+s_num<-ggplot(season_count,aes(x=seasons,y=count, fill=as.factor(seasons)))
+s_num+geom_bar(stat = "identity")+labs(title="Happiest Season")+ theme(legend.position = "bottom",title = red.bold.italic.text, axis.title = red.bold.italic.text, plot.title = element_text(hjust = 0.5))
+  
+
+```
+
+
+
+
+```{r}
+
+```
+
