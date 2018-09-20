@@ -12,17 +12,18 @@ library(scales)
 library(wordcloud2)
 library(gridExtra)
 library(ngram)
-library(shiny) 
+library(dplyr)
 library(tm)
 library(ggplot2)
 library(topicmodels)
 library(SnowballC)
+library(d3heatmap)
+library(syuzhet)
 ```
 
 
 ```{r load data, warning=FALSE, message=FALSE}
 hm_data <- read_csv("../output/processed_moments.csv")
-
 urlfile<-'https://raw.githubusercontent.com/rit-public/HappyDB/master/happydb/data/demographic.csv'
 demo_data <- read_csv(urlfile)
 ```
@@ -32,6 +33,8 @@ hm_data <- hm_data %>%
   inner_join(demo_data, by = "wid") %>%
   select(wid,
          original_hm,
+         cleaned_hm,
+         predicted_category,
          gender, 
          marital, 
          parenthood,
@@ -45,22 +48,12 @@ hm_data <- hm_data %>%
   filter(marital %in% c("single", "married")) %>%
   filter(parenthood %in% c("n", "y")) %>%
   filter(reflection_period %in% c("24h", "3m")) %>%
-  mutate(reflection_period = fct_recode(reflection_period, 
-                                        months_3 = "3m", hours_24 = "24h"))
+  mutate(reflection_period = fct_recode(reflection_period, months_3 = "3m", hours_24 = "24h"))
+
+ 
 ```
-
+#wordcloud showing word frequency for happy moments
 ```{r wordcloud2}
-
-wc2<-function(data){
-  words<-strsplit(data$text," ")
-  words.freq<-table(unlist(words));
-  freq<-sort(words.freq,decreasing = TRUE)
-  freq<-data.frame(word = names(freq),freq =as.numeric(freq))
-  figPath <-"../figs/Happy.png"
-  wordcloud2(data=freq, figPath = figPath, size = 1.5,color = "random-light",backgroundColor = "black")
-}
-
-
 words<-strsplit(hm_data$text," ")
 words.freq<-table(unlist(words));
 freq<-sort(words.freq,decreasing = TRUE)
@@ -77,6 +70,8 @@ g_num+geom_bar(aes(fill = gender),position = position_stack(reverse = TRUE)) +
   labs(title = "Who is Happier?", x = "Marital Status", y = "Count")+
   theme(legend.position = "bottom",title = red.bold.italic.text, axis.title = red.bold.italic.text, plot.title = element_text(hjust = 0.5))
 ```
+
+
 ```{r happiest season}
 seasons<-c("spring","summer","fall","winter")
 count<-c()
@@ -90,11 +85,115 @@ s_num+geom_bar(stat = "identity")+labs(title="Happiest Season")+ theme(legend.po
   
 
 ```
-
-
-
-
+#Effect of gender on happy categories
 ```{r}
+predict_category<-unique(hm_data$predicted_category)
+Male<-c(rep(0,7))
+Female<-c(rep(0,7))
+Single<-c(rep(0,7))
+Married<-c(rep(0,7))
+
+df_category<-data.frame(Male,Female,Single,Married,row.names = predict_category)
+for(i in 1:length(predict_category)){
+  df_category$Male[i]<-sum(hm_data[hm_data$gender=="m",]$predicted_category == predict_category[i])
+  df_category$Female[i]<-sum(hm_data[hm_data$gender=="f",]$predicted_category == predict_category[i])
+  df_category$Single[i]<-sum(hm_data[hm_data$marital=="single",]$predicted_category == predict_category[i])
+  df_category$Married[i]<-sum(hm_data[hm_data$marital=="married",]$predicted_category == predict_category[i])
+}
+d3heatmap(df_category,scale = "column",colors = "Blues")
+#############################################################
 
 ```
+
+
+
+
+#Supervised topic modeling with TF-IDF
+
+```{r}
+#I am creating a function that can do suprevised modeling using TF-IDF("term frequency-inverse document frequency") method. TF-IDF can help identify words that are common in specifict documents(we assume they are important) and words that are common in all documents(we assume words that shows in all documents aren't important).
+
+#The function takes in a dataframe, the name of the column that has the texts and the name of the column that has the topic labels(gender,marital etc.)in it.
+
+top_terms_by_topic_tfidf <- function(text_df, text_column, group_column, plot = T){
+  group_column <- enquo(group_column)
+  text_column <- enquo(text_column)
+  
+  # get the count of each word in each review
+  words <- text_df %>%
+    unnest_tokens(word, !!text_column) %>%
+    count(!!group_column, word) %>% 
+    ungroup()
+  # get the number of words per text
+  total_words <- words %>% 
+    group_by(!!group_column) %>% 
+    summarize(total = sum(n))
+  
+  # combine the two dataframes we just made
+  words <- left_join(words, total_words)
+  
+  # get the tf_idf & order the words by degree of relevence
+  tf_idf <- words %>%
+    bind_tf_idf(word, !!group_column, n) %>%
+    select(-total) %>%
+    arrange(desc(tf_idf)) %>%
+    mutate(word = factor(word, levels = rev(unique(word))))
+  
+  if(plot == T){
+    # convert "group" into a quote of a name
+    group_name <- quo_name(group_column)
+    tf_idf %>% 
+      group_by(!!group_column) %>% 
+      top_n(10) %>% 
+      ungroup %>%
+      ggplot(aes(word, tf_idf, fill = as.factor(group_name))) +
+      geom_col(show.legend = FALSE) +
+      labs(x = NULL, y = "tf-idf") +
+      facet_wrap(reformulate(group_name), scales = "free") +
+      coord_flip()
+  }else{
+    # return the entire tf_idf dataframe
+    return(tf_idf)
+  }
+}
+```
+
+```{r}
+top_terms_by_topic_tfidf(text_df = hm_data,
+                         text_column = text,
+                         group_column = parenthood,
+                         plot = TRUE)
+```
+
+```{r}
+top_terms_by_topic_tfidf(text_df = hm_data,
+                         text_column = text,
+                         group_column = marital,
+                         plot = TRUE)
+```
+
+```{r}
+twenties <- hm_data[which(hm_data$age>=20 & hm_data$age<30),"text"]
+thirties <-hm_data[which(hm_data$age >=30 & hm_data$age<40),"text"]
+forties <-hm_data[which(hm_data$age >=40 & hm_data$age<50),"text"]
+fifties <-hm_data[which(hm_data$age >=50& hm_data$age<60),"text"]
+sixties <-hm_data[which(hm_data$age >=60 & hm_data$age<70),"text"]
+seventyup <-hm_data[which(hm_data$age >=70),"text"]
+
+
+sv20<-get_sentiment(twenties$text, method = "nrc")
+sv30<-get_sentiment(thirties$text, method = "nrc")
+sv40<-get_sentiment(forties$text, method = "nrc")
+sv50<-get_sentiment(fifties$text, method = "nrc")
+sv60<-get_sentiment(sixties$text, method = "nrc")
+sv70up<-get_sentiment(seventyup$text, method = "nrc")
+
+sentiment_values<-list(sv20,sv30,sv40,sv50,sv60,sv70up)
+names(sentiment_values)<-c("20s","30s","40s","50s","60s","70s+")
+boxplot(sentiment_values,ylim=c(-10, 20),ylab="Sentiment of Experiences",xlab  = "Sentiment of Happy Experience by Age")
+
+```
+
+
+
 
